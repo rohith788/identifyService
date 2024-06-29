@@ -13,10 +13,12 @@ class Users(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(255))
-    phone_number = Column(String(10))
+    phoneNumber = Column(String(10))
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
     deletedAt = Column(DateTime, nullable=True)
+    linkedID = Column(Integer)
+    linkedPrecidnece = Column(String(9))
 
 # Create database engine and session maker
 engine = create_engine(DATABASE_URL)
@@ -26,6 +28,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def get_db():
     db = SessionLocal()
     try:
-        yield db
+        return db
     finally:
         db.close()
