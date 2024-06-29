@@ -1,95 +1,100 @@
-from datetime import datetime
-
-import sanic
-import json
+from sanic import Sanic, response
 from sanic.exceptions import InvalidUsage
-from models import get_db, Users
+from sanic.request import Request
+from sanic.response import json
+from sqlalchemy import or_
 
-app = sanic.Sanic("user_service")
-def create_contact(email, phoneNumber, primary_contact_id=None, secondary_contact_ids=None):
-    contact = {
-        "emails": list(email) if email else [],
-        "phoneNumbers": list(phoneNumber) if phoneNumber else [],
+from models import get_db, Contact
+
+app = Sanic("identity_reconciliation")
+
+def find_contacts(db, email=None, phone_number=None):
+    # Querying the database to find any elements that have the same email or phone number
+    query = db.query(Contact).filter(
+        or_(
+            Contact.email == email,
+            Contact.phoneNumber == phone_number
+        )
+    )
+    return query.all() # retriveing all the elements that mathc the query
+
+
+def consolidate_contacts(db, existing_contacts, new_email=None, new_phone_number=None):
+    first_contact = min(existing_contacts, key=lambda c: c.createdAt) # element created first
+
+    if first_contact.linkPrecedence == 'primary':
+        primary_contact = first_contact
+        if len(existing_contacts) == 1: # find all the secondary elements if we already dont have it
+            existing_contacts = db.query(Contact).filter(Contact.linkedId == primary_contact.id).all()
+    else:# find the primary element for the given query
+        primary_contact = db.query(Contact).filter(Contact.id == first_contact.linkedId).first()
+    secondary_contacts = [c for c in existing_contacts if c != primary_contact]
+    # store email and phone numbers
+    emails = list({c.email for c in existing_contacts if c.email})
+    phone_numbers = list({c.phoneNumber for c in existing_contacts if c.phoneNumber})
+    # store primary element details
+    if primary_contact.email not in emails: emails.append(primary_contact.email)
+    if primary_contact.phoneNumber not in phone_numbers: emails.append(primary_contact.phoneNumber)
+    # either of the elements are not stored in the db, store it
+    if new_email and new_email not in emails:
+        new_contact = Contact(email=new_email, phoneNumber=new_phone_number, linkedId=primary_contact.id, linkPrecedence='secondary')
+        db.add(new_contact)
+        secondary_contacts.append(new_contact)
+        emails.append(new_email)
+    if new_phone_number and new_phone_number not in phone_numbers:
+        new_contact = Contact(email=new_email, phoneNumber=new_phone_number, linkedId=primary_contact.id, linkPrecedence='secondary')
+        db.add(new_contact)
+        secondary_contacts.append(new_contact)
+        phone_numbers.append(new_phone_number)
+
+    secondary_contact_ids = [c.id for c in secondary_contacts]
+
+    # Update existing secondary contacts to point to the primary contact
+    for contact in secondary_contacts:
+        contact.linkedId = primary_contact.id
+        contact.linkPrecedence = 'secondary'
+        db.commit()
+
+    return {
+        "primaryContactId": primary_contact.id,
+        "emails": emails,
+        "phoneNumbers": phone_numbers,
+        "secondaryContactIds": secondary_contact_ids
     }
-    if primary_contact_id:
-        contact["primaryContatctId"] = primary_contact_id
-    if secondary_contact_ids:
-        contact["secondaryContactIds"] = list(secondary_contact_ids)
-    return contact
-async def addUser(email, phoneNumber, linkedID, flag):
-    db = get_db()
-    newUser = Users(email=email, phoneNumber=phoneNumber, created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
-                    linkedID=linkedID, linkedPrecidnece=flag)
-    db.add(newUser)
-    db.commit()
-    db.close()
 
-@app.post("/v1/identify")
-async def create_user(request):
-    #update secondary contact logic
-        # chekc if same emial and phone number exists
+
+def create_or_update_contact(db, email=None, phone_number=None):
+    existing_contacts = find_contacts(db, email, phone_number) # querying the data from db
+    if existing_contacts: # generating output if the user already exists
+        return consolidate_contacts(db, existing_contacts, email, phone_number)
+    else:
+        # Creating a new user identity
+        new_contact = Contact(email=email, phoneNumber=phone_number)
+        db.add(new_contact)
+        db.commit()
+        return consolidate_contacts(db, [new_contact])
+
+
+@app.post('/identify')
+async def identify(request: Request):
     try:
+        # parsing the request
         data = request.json
-        email = data.get("email")
-        phoneNumber = data.get("phoneNumber")  # Adjust field name
-        db = get_db()
-        flag = "Primary"
-        linkedID = None
-        emails = set()
-        secondaryIds = set()
-        phoneNumbers = set()
+        email = data.get('email')
+        phone_number = data.get('phoneNumber')
 
-        q1 = db.query(Users).filter((Users.email == email)).first()
-        q2 = db.query(Users).filter((Users.phoneNumber == phoneNumber)).first()
-        if q1 and q1 == q2 and q1.linkedPrecidnece == 'Primary':
-            linkedID = q1.id
-            if q1.email != None: emails.add(q1.email)
-            if q1.phoneNumber != None: phoneNumbers.add(q1.phoneNumber)
-        elif q1.linkedPrecidnece == 'Primary' and q2.linkedPrecidnece == 'Primary':
-            if q1.id < q2.id:
-                linkedID = q1.id
-                q2.linkedPrecidnece = 'Secondary'
-                q2.linkedID = linkedID
-                if q1.email != None: emails.add(q1.email)
-                if q1.phoneNumber != None: phoneNumbers.add(q1.phoneNumber)
-            else:
-                linkedID = q2.id
-                q1.linkedPrecidnece = 'Secondary'
-                q1.linkedID = linkedID
-                if q2.email != None: emails.add(q2.email)
-                if q2.phoneNumber != None: phoneNumbers.add(q2.phoneNumber)
+        db = get_db()# getting the database connection
+        contact_info = create_or_update_contact(db, email, phone_number)
+        db.close()# closing database connection
 
-        existingUser = db.query(Users).filter(Users.linkedID == linkedID).all()
-
-        if len(existingUser) > 0:
-            flag = "Secondary"
-            for user in existingUser:
-                if user.linkedPrecidnece == "Primary":
-                    temp = db.query(Users).filter((Users.email == user.email) & (Users.phoneNumber == user.phoneNumber)).first()
-                    temp.linkedPrecidnece = "Secondary"
-                    temp.linkedID = linkedID
-                    secondaryIds.add(user.id)
-                else:
-                    secondaryIds.add(user.id)
-                if user.email != None: emails.add(user.email)
-                if user.phoneNumber != None: phoneNumbers.add(user.phoneNumber)
-        q1 = db.query(Users).filter((Users.email == email)).first()
-        q2 = db.query(Users).filter((Users.phoneNumber == phoneNumber)).first()
-        addUsr = None
-        if (not q1 and email is not None) or (not q2 and phoneNumber is not None):
-            addUsr = addUser(email=email, phoneNumber=phoneNumber,linkedID=linkedID, flag=flag)
-        if addUsr: await addUsr
-        # db.commit()
-        db.close()
-        # Assuming primary_contact_id and secondary_contact_ids are generated elsewhere
-        contact = create_contact(emails, phoneNumbers, primary_contact_id=linkedID, secondary_contact_ids=secondaryIds)
-        return sanic.response.json({"contact": contact})
+        return json({"contact": contact_info})
     except InvalidUsage as e:
-        return sanic.response.json({"error": str(e)}, status=400)
+        return json({"error": str(e)}, status=400)
     except Exception as e:
         # Log the error and return a generic error message
         print(f"Error creating user: {str(e)}")
-        return sanic.response.json({"error": "Internal server error"}, status=500)
+        return json({"error": "Internal server error"}, status=500)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)

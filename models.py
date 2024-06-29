@@ -1,32 +1,32 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey,or_
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, relationship
+from datetime import datetime
 
 # Replace with your database connection details
-DATABASE_URL = "sqlite:///users.db"  # Adjust for your database engine
+engine = create_engine('sqlite:///contacts.db') # Adjust for your database engine
 
 # Define database models
 Base = declarative_base()
 
-class Users(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    email = Column(String(255))
-    phoneNumber = Column(String(10))
-    created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
+class Contact(Base):
+    __tablename__ = 'contacts'
+    # Create the db models with the necessary models
+    id = Column(Integer, primary_key=True)
+    phoneNumber = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    linkedId = Column(Integer, ForeignKey('contacts.id'), nullable=True)
+    linkPrecedence = Column(String, nullable=False, default='primary')
+    createdAt = Column(DateTime, default=datetime.utcnow)
+    updatedAt = Column(DateTime, default=datetime.utcnow)
     deletedAt = Column(DateTime, nullable=True)
-    linkedID = Column(Integer)
-    linkedPrecidnece = Column(String(9))
 
 # Create database engine and session maker
-engine = create_engine(DATABASE_URL)
 Base.metadata.create_all(engine)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Session = sessionmaker(bind=engine)
 
 def get_db():
-    db = SessionLocal()
+    db = Session()
     try:
         return db
     finally:
