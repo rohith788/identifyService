@@ -34,16 +34,20 @@ def consolidate_contacts(db, existing_contacts, new_email=None, new_phone_number
     phone_numbers = list({c.phoneNumber for c in existing_contacts if c.phoneNumber})
     # store primary element details
     if primary_contact.email not in emails: emails.append(primary_contact.email)
-    if primary_contact.phoneNumber not in phone_numbers: emails.append(primary_contact.phoneNumber)
+    if primary_contact.phoneNumber not in phone_numbers: phone_numbers.append(primary_contact.phoneNumber)
     # either of the elements are not stored in the db, store it
     if new_email and new_email not in emails:
         new_contact = Contact(email=new_email, phoneNumber=new_phone_number, linkedId=primary_contact.id, linkPrecedence='secondary')
         db.add(new_contact)
-        secondary_contacts.append(new_contact)
+        contact = db.query(Contact).filter(Contact.email == new_email).filter(Contact.phoneNumber == new_phone_number).filter(Contact.linkedId == primary_contact.id).first()
+        secondary_contacts.append(contact)
         emails.append(new_email)
     if new_phone_number and new_phone_number not in phone_numbers:
         new_contact = Contact(email=new_email, phoneNumber=new_phone_number, linkedId=primary_contact.id, linkPrecedence='secondary')
         db.add(new_contact)
+        contact = db.query(Contact).filter(
+            Contact.phoneNumber == new_phone_number).filter(Contact.email == new_email).filter(Contact.linkedId == primary_contact.id).first()
+        secondary_contacts.append(contact)
         secondary_contacts.append(new_contact)
         phone_numbers.append(new_phone_number)
 
