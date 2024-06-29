@@ -2,6 +2,9 @@
 
 This service consolidates contact information to reconcile identities based on email and phone number.
 
+This service is using a free tier for hosting and at times can get inactive. 
+
+**So please give it about 1 minute if it gets too slow**
 ## Features
 
 - Identifies and consolidates contact entries based on provided email and phone number.
